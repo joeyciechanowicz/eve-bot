@@ -10,6 +10,7 @@ import (
 
 	"github.com/joeyciechanowicz/eve-bot/action"
 	"github.com/joeyciechanowicz/eve-bot/event"
+	"github.com/joeyciechanowicz/eve-bot/internal/enrich"
 	"github.com/joeyciechanowicz/eve-bot/internal/rules"
 	"github.com/joeyciechanowicz/eve-bot/source"
 )
@@ -18,6 +19,7 @@ import (
 // through a single shared rule engine.
 type Pipeline struct {
 	Sources    []source.Source
+	Enrichers  enrich.Chain
 	Rules      *rules.Set
 	Dispatcher *action.Dispatcher
 	Facts      rules.FactStore // passed to rule expressions
@@ -72,6 +74,11 @@ func (p *Pipeline) Run(ctx context.Context) error {
 }
 
 func (p *Pipeline) process(ctx context.Context, ev *event.Event) {
+	if len(p.Enrichers) > 0 {
+		if err := p.Enrichers.Enrich(ctx, ev); err != nil {
+			slog.Warn("pipeline: enrich", "event_id", ev.ID, "error", err)
+		}
+	}
 	matches := p.Rules.Evaluate(ev, p.Facts)
 	if len(matches) == 0 {
 		return

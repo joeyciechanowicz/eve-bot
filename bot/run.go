@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/joeyciechanowicz/eve-bot/action"
+	"github.com/joeyciechanowicz/eve-bot/internal/enrich"
+	"github.com/joeyciechanowicz/eve-bot/internal/enrich/names"
 	"github.com/joeyciechanowicz/eve-bot/internal/pipeline"
 	"github.com/joeyciechanowicz/eve-bot/internal/rules"
 	"github.com/joeyciechanowicz/eve-bot/internal/store"
@@ -78,8 +80,13 @@ func buildPipeline(cfg *Config, st *store.Store, hc *http.Client) (*pipeline.Pip
 
 	disp := action.New(handlers, st, cfg.Retry.MaxRetries, cfg.Retry.BaseBackoff, cfg.Retry.MaxBackoff)
 
+	enrichers := enrich.Chain{
+		names.New(hc, st, cfg.Enrich.Names.CacheTTL, cfg.Enrich.Names.BaseURL),
+	}
+
 	return &pipeline.Pipeline{
 		Sources:    srcs,
+		Enrichers:  enrichers,
 		Rules:      ruleSet,
 		Dispatcher: disp,
 		Facts:      st,

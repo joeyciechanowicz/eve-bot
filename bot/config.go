@@ -35,6 +35,21 @@ type Config struct {
 
 	Sources []SourceConfig `yaml:"sources"`
 	Rules   RuleSetConfig  `yaml:"rules"`
+
+	Enrich EnrichConfig `yaml:"enrich"`
+}
+
+// EnrichConfig configures cross-cutting enrichers that run after source-local
+// normalization. All entries are optional; zero-value disables.
+type EnrichConfig struct {
+	Names NamesEnrichConfig `yaml:"names"`
+}
+
+// NamesEnrichConfig configures the ESI name resolver. The enricher is always
+// wired in; these fields only override its defaults.
+type NamesEnrichConfig struct {
+	CacheTTL time.Duration `yaml:"cache_ttl"`
+	BaseURL  string        `yaml:"base_url"`
 }
 
 // SourceConfig names a source instance and selects its driver. Additional
@@ -113,5 +128,8 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Retry.MaxBackoff <= 0 {
 		c.Retry.MaxBackoff = 10 * time.Second
+	}
+	if c.Enrich.Names.CacheTTL <= 0 {
+		c.Enrich.Names.CacheTTL = 7 * 24 * time.Hour
 	}
 }

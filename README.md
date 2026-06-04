@@ -19,8 +19,10 @@ the pipeline is pluggable:
 
 - **Sources** produce `Event`s. Killmails, wormhole-connection updates, ESI
   polling, and Discord slash-commands are all just sources.
-- **Enrichers** mutate `Event.Fields` — SDE lookups, fact lookups from the
-  store, anything a rule might want to read.
+- **Enrichers** mutate `Event.Fields` — SDE lookups for ship / weapon / item
+  names and meta levels, ESI `/v3/universe/names/` lookups for character /
+  corporation / alliance names (cached in SQLite for 7 days by default),
+  fact lookups from the store, anything a rule might want to read.
 - **Rules** are YAML-declarative; the `when:` clause is an
   [expr-lang](https://github.com/expr-lang/expr) boolean expression compiled
   at startup.

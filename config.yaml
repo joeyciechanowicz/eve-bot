@@ -12,6 +12,17 @@ retry:
   base_backoff: 250ms
   max_backoff: 10s
 
+# Cross-cutting enrichers that run after a source's local normalization but
+# before rule evaluation.
+enrich:
+  names:
+    # Resolves character / corporation / alliance IDs to names via ESI bulk
+    # /v3/universe/names/. Always on. Resolved names are cached in the store
+    # for cache_ttl. Rule expressions and webhook templates can use the new
+    # `*_name` fields under victim, each attacker, and final_blow.
+    cache_ttl: 168h   # 7d
+    # base_url: https://esi.evetech.net
+
 # Event producers. Each source runs in its own goroutine and feeds the shared
 # rule engine below. The `name` identifies a source instance for checkpoints
 # and is what rules match on via the optional `sources:` field.

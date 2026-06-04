@@ -47,9 +47,25 @@ when a rule is scoped to multiple sources, branch on `event_source` (or
 | `zkb`               | object    | zKillboard metadata              |
 | `has_capital`       | bool      | any participant is capital-class |
 
-**Victim / attacker / item shapes** mirror the ESI killmail payload plus SDE
-additions: `ship_name`, `ship_group`, `ship_group_id`, `ship_category`,
-`meta_level`, `meta_group` (for ships); `name` for items.
+**Victim / attacker / item shapes** mirror the ESI killmail payload plus
+enrichment additions:
+
+- **Ship fields** (`victim` and each `attackers[*]`): `ship_name`,
+  `ship_group`, `ship_group_id`, `ship_category`. Attackers additionally get
+  `meta_level` and `meta_group` for their ship type.
+- **Weapon fields** (each `attackers[*]`): `weapon_name`, `weapon_group`,
+  `weapon_group_id`, `weapon_category` — looked up from `weapon_type_id` via
+  the SDE.
+- **Item fields** (`items[*]`): `name`, `meta_level`, `meta_group`.
+- **Actor name fields** (`victim`, each `attackers[*]`, and `final_blow`):
+  `character_name`, `corporation_name`, `alliance_name` — resolved from
+  `character_id` / `corporation_id` / `alliance_id` via the ESI
+  `/v3/universe/names/` bulk endpoint and cached in the SQLite store
+  (7-day TTL by default). Names for IDs of `0` are not set, so NPC kills
+  (`character_id == 0`) won't have `character_name`. If ESI is unreachable
+  the lookup is skipped and the name field is simply absent — write
+  rules against the IDs for hard checks and use the names for templating
+  webhook bodies.
 
 ### evescout source
 
@@ -166,6 +182,24 @@ Plus the full expr-lang builtins: `any`, `all`, `filter`, `map`, `len`,
     && zkb.total_value > 5e8
     && !zkb.npc
   actions: [{ type: console }]
+```
+
+### Alliance-scoped alert (uses ESI names)
+
+```yaml
+- name: goonswarm-loses-capital
+  priority: 15
+  when: |
+    has_capital
+    && victim.alliance_name == "Goonswarm Federation"
+  actions:
+    - type: webhook
+      args:
+        url: https://discord.com/api/webhooks/XXX/YYY
+        body:
+          content: >
+            💀 {{.victim.character_name}} ({{.victim.corporation_name}})
+            lost a {{.victim.ship_name}} in {{.solar_system_name}}
 ```
 
 ### Watched wormhole exit (evescout)

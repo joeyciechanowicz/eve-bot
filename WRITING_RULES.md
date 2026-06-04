@@ -25,6 +25,8 @@ Exit codes: `0` match, `1` no-match, `2` compile/runtime error. Treat `2` as a b
 
 `testdata/killmails/` holds zkill fixtures. `testdata/signatures/` holds evescout fixtures (hand-maintained; small enough that the schema-drift risk is low). Both directories contain captured post-enrichment events as JSON (the same `Event.Fields` shape rules see).
 
+**Note on names:** `cmd/capture-fixture` runs the source-local enrich (SDE lookups for ship/weapon/item names and meta levels) but **not** the pipeline-level ESI names enricher, so fixtures won't contain `character_name` / `corporation_name` / `alliance_name`. Validate name-based rules against the IDs (`victim.alliance_id == 1354830081`) when running `cmd/rule-check` locally; the name fields will be present at runtime but `nil` in the fixture.
+
 zkill fixtures:
 
 | File                | Scenario                                              |
@@ -61,6 +63,7 @@ The predicate uses the same expr-lang environment as rules. Common gaps worth ca
 - **Fact writers need `continue: true`.** Without it, the writer matches and stops the pipeline before the decision rules run.
 - **`!zkb.npc` on alerting rules.** NPC kills are noisy; almost every "interesting human activity" rule wants this guard. Ask the user if you're unsure.
 - **Long action bodies should use YAML anchors.** If a rule's `args.body:` (typically a Discord embed or other webhook payload) is likely to be reused across rules, define it once under `x-templates:` with `&name` and reference it via `*name`. See the "Reusable action bodies" section in `RULES.md`. Don't inline a 30-line embed into three rules.
+- **ESI name fields are best-effort.** `character_name` / `corporation_name` / `alliance_name` come from the ESI bulk-names endpoint and are cached for 7 days. If ESI is unreachable on the very first sighting of an ID, the name is absent (rules see `nil`). For hard equality checks prefer the underlying ID (`victim.alliance_id == 1354830081`); reserve names for templated action bodies where a missing name is cosmetic, not load-bearing.
 
 ## Output to the user
 

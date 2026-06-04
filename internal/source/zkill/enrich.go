@@ -36,19 +36,26 @@ func enrich(ev *event.Event) {
 			if !ok {
 				continue
 			}
-			stID, _ := am["ship_type_id"].(int64)
-			t, ok := sde.LookupType(stID)
-			if !ok {
-				continue
+			if stID, _ := am["ship_type_id"].(int64); stID != 0 {
+				if t, ok := sde.LookupType(stID); ok {
+					am["ship_name"] = t.TypeName
+					am["ship_group"] = t.GroupName
+					am["ship_category"] = t.CatName
+					am["ship_group_id"] = t.GroupID
+					am["meta_level"] = t.MetaLevel
+					am["meta_group"] = t.MetaGroup
+					if sde.IsCapitalGroup(t.GroupID) {
+						hasCapital = true
+					}
+				}
 			}
-			am["ship_name"] = t.TypeName
-			am["ship_group"] = t.GroupName
-			am["ship_category"] = t.CatName
-			am["ship_group_id"] = t.GroupID
-			am["meta_level"] = t.MetaLevel
-			am["meta_group"] = t.MetaGroup
-			if sde.IsCapitalGroup(t.GroupID) {
-				hasCapital = true
+			if wID, _ := am["weapon_type_id"].(int64); wID != 0 {
+				if t, ok := sde.LookupType(wID); ok {
+					am["weapon_name"] = t.TypeName
+					am["weapon_group"] = t.GroupName
+					am["weapon_group_id"] = t.GroupID
+					am["weapon_category"] = t.CatName
+				}
 			}
 		}
 	}
@@ -62,6 +69,8 @@ func enrich(ev *event.Event) {
 			if tID, ok := im["item_type_id"].(int64); ok {
 				if t, ok := sde.LookupType(tID); ok {
 					im["name"] = t.TypeName
+					im["meta_level"] = t.MetaLevel
+					im["meta_group"] = t.MetaGroup
 				}
 			}
 		}
