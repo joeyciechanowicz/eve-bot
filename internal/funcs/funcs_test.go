@@ -1,8 +1,10 @@
 package funcs
 
 import (
+	"bytes"
 	"strings"
 	"testing"
+	"text/template"
 
 	"github.com/expr-lang/expr"
 )
@@ -170,5 +172,45 @@ func TestBindExprEnv_ArgCountMismatch(t *testing.T) {
 	prog, _ := expr.Compile("f(1)", expr.AllowUndefinedVariables())
 	if _, err := expr.Run(prog, env); err == nil {
 		t.Fatal("want arg-count error, got nil")
+	}
+}
+
+func renderTmpl(t *testing.T, s *Set, src string, ctx map[string]any) string {
+	t.Helper()
+	tmpl, err := template.New("").Funcs(s.TemplateFuncMap(ctx)).Option("missingkey=zero").Parse(src)
+	if err != nil {
+		t.Fatalf("parse %q: %v", src, err)
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, ctx); err != nil {
+		t.Fatalf("exec %q: %v", src, err)
+	}
+	return buf.String()
+}
+
+func TestTemplateFuncMap_GoFunc(t *testing.T) {
+	s, err := Compile(map[string]any{
+		"upper": func(x string) string { return strings.ToUpper(x) },
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := renderTmpl(t, s, `{{ upper "hi" }}`, map[string]any{})
+	if got != "HI" {
+		t.Fatalf("got %q, want HI", got)
+	}
+}
+
+func TestTemplateFuncMap_YamlReadsCtx(t *testing.T) {
+	s, err := Compile(nil, map[string]string{
+		"is_expensive(threshold)": "value > threshold",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := renderTmpl(t, s, `{{ if is_expensive 100 }}yes{{ else }}no{{ end }}`,
+		map[string]any{"value": 250})
+	if got != "yes" {
+		t.Fatalf("got %q, want yes", got)
 	}
 }

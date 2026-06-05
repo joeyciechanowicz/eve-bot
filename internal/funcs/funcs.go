@@ -13,6 +13,7 @@ import (
 	"maps"
 	"reflect"
 	"strings"
+	"text/template"
 
 	"github.com/expr-lang/expr"
 	"github.com/expr-lang/expr/ast"
@@ -262,4 +263,24 @@ func makeClosure(yf yamlFunc, env map[string]any) func(...any) (any, error) {
 		}
 		return expr.Run(yf.program, child)
 	}
+}
+
+// TemplateFuncMap returns a text/template FuncMap for one render context. Go
+// funcs are exposed directly; YAML funcs are bound through an expr env derived
+// from ctx, so inside a template they can still read event fields and call
+// peer funcs — exactly as they do in `when:` expressions.
+func (s *Set) TemplateFuncMap(ctx map[string]any) template.FuncMap {
+	fm := template.FuncMap{}
+	if s == nil {
+		return fm
+	}
+	env := maps.Clone(ctx)
+	s.BindExprEnv(env)
+	for name := range s.goFuncs {
+		fm[name] = env[name]
+	}
+	for _, yf := range s.yamlFuncs {
+		fm[yf.name] = env[yf.name]
+	}
+	return fm
 }
