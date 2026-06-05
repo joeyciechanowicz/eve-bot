@@ -27,7 +27,9 @@ the pipeline is pluggable:
   [expr-lang](https://github.com/expr-lang/expr) boolean expression compiled
   at startup.
 - **Actions** are the side effects — console, webhook, fact-store writes,
-  Discord replies — with idempotency and retry built in.
+  Discord replies — with idempotency and retry built in. Fact writes use the
+  `store` action, which supports per-fact TTLs. See
+  [The `store` action](RULES.md#the-store-action).
 - **Custom functions** — declare reusable, parameterized helpers in a
   top-level `functions:` block, or register Go functions with `bot.WithFunc`.
   Both are callable from every `when:` expression **and** every templated

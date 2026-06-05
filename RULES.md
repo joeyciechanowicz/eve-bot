@@ -109,6 +109,92 @@ Plus the full expr-lang builtins: `any`, `all`, `filter`, `map`, `len`,
 `contains`, `string`, `int`, date/time functions, etc. See
 <https://expr-lang.org/docs/language-definition>.
 
+## The `store` action
+
+The helpers above *read* facts; the `store` action *writes* them. It is the
+counterpart that records state for later rules (in the same pipeline or a
+[cross-source](#cross-source-rules) one) to read back.
+
+```yaml
+- type: store
+  args:
+    scope: kill_by_char            # required
+    key: "{{ .victim.character_id }}" # required (templated)
+    op: inc                        # set | inc | merge | delete (default: set)
+    field: count                   # op=inc only (default: "count")
+    by: 1                          # op=inc only (default: 1)
+    value: { ... }                 # op=set (any) / op=merge (object)
+    ttl: 720h                      # optional; see below (default: never expire)
+```
+
+| Arg     | Used by         | Notes                                                     |
+| ------- | --------------- | -------------------------------------------------------- |
+| `scope` | all             | Required namespace for the key.                          |
+| `key`   | all             | Required; templated per event.                           |
+| `op`    | all             | `set` / `inc` / `merge` / `delete`. Default `set`.       |
+| `value` | `set`, `merge`  | `set`: any value. `merge`: object shallow-merged in.     |
+| `field` | `inc`           | Numeric field to bump. Default `count`.                  |
+| `by`    | `inc`           | Increment amount. Default `1`.                            |
+| `ttl`   | `set`/`inc`/`merge` | Per-fact lifetime — see below. Ignored by `delete`.  |
+
+### Per-fact TTL
+
+`ttl` is set **per `store` call**, so different rules — or different `store`
+actions within one rule — can keep facts for different lengths of time. There
+is **no global or default TTL**: a `store` with no `ttl` (or `ttl: 0`) writes a
+fact that **never expires**.
+
+```yaml
+# Most facts: a short rolling window.
+- type: store
+  args: { scope: seen, key: "{{ .victim.character_id }}", value: true, ttl: 24h }
+
+# This specific fact: keep it for ~6 months.
+- type: store
+  args: { scope: flagged, key: "{{ .victim.character_id }}", value: true, ttl: 4320h }
+```
+
+The value is a Go [duration string](https://pkg.go.dev/time#ParseDuration), and
+its largest unit is `h` (hours) — there is **no day/month/year unit**. Express
+longer windows in hours: `24h` (1 day), `720h` (30 days), `4320h` (180 days).
+An unparseable value (e.g. `180d`) fails the action at dispatch.
+
+TTL-refresh behaviour differs by op:
+
+- **`set`** always overwrites the expiry. Re-storing a key with no `ttl` resets
+  it to never-expire.
+- **`inc`** / **`merge`** only touch the expiry when `ttl > 0`; otherwise the
+  existing expiry is left alone. So repeated increments won't accidentally clear
+  a TTL, but they won't extend it either unless you pass one each time.
+
+Expired facts are swept by a background janitor (`store.janitor_interval`), but
+reads (`fact`, `fact_exists`, `fact_count`) already treat an expired fact as
+absent before the janitor runs.
+
+### Value typing — templated values are strings
+
+Action args are rendered with `text/template`, whose output is **always a
+string**. So a templated `value` is stored as a JSON string, not a number:
+
+```yaml
+# Stores the JSON string "1500000000.0", NOT the number 1500000000.
+- type: store
+  args: { scope: hi, key: "{{ .killmail_id }}", value: "{{ .zkb.total_value }}" }
+```
+
+A later rule reading it back gets a string, so a numeric `when:` check such as
+`fact("hi", string(killmail_id)) > 1e9` compares string-to-number and won't
+behave as intended. To store a real number, choose one of:
+
+- Use `op: inc` (the stored field stays numeric), or
+- Set a **literal** YAML number — `value: 1500000000` — which passes through
+  untemplated (only strings containing `{{` are rendered), or
+- Store the templated string but `int(...)` / `float(...)` it at read time in
+  the `when:` expression.
+
+This is why fact writers commonly key on an ID (`key: "{{ .victim.character_id }}"`)
+and store presence/`inc` counts rather than templated numeric values.
+
 ## Custom functions
 
 Declare reusable functions in a top-level `functions:` block. The key is a
@@ -379,9 +465,10 @@ rules:
           args:
             scope: wh_target
             key: "{{ .solar_system_id }}"
-            op: set
-            field: total_value
-            value: "{{ .zkb.total_value }}"
+            # The reader below only checks existence, so store presence.
+            # (A templated numeric value would be stored as a string — see
+            # "Value typing" above; use op: inc to keep a real number.)
+            value: true
             ttl: 720h
 
     - name: thera-connection-to-target
