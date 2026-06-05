@@ -60,3 +60,31 @@ func TestCompileRejectsNonTemplateGoFunc(t *testing.T) {
 		t.Fatalf("want signature error, got %v", err)
 	}
 }
+
+func TestCompileRejectsCycle(t *testing.T) {
+	_, err := Compile(nil, map[string]string{
+		"a(x)": "b(x)",
+		"b(x)": "a(x)",
+	})
+	if err == nil || !strings.Contains(err.Error(), "cycle") {
+		t.Fatalf("want cycle error, got %v", err)
+	}
+}
+
+func TestCompileRejectsSelfRecursion(t *testing.T) {
+	_, err := Compile(nil, map[string]string{"a(x)": "a(x)"})
+	if err == nil || !strings.Contains(err.Error(), "recursive") {
+		t.Fatalf("want recursion error, got %v", err)
+	}
+}
+
+func TestCompileAllowsAcyclicChain(t *testing.T) {
+	_, err := Compile(nil, map[string]string{
+		"a(x)": "b(x) + 1",
+		"b(x)": "c(x) * 2",
+		"c(x)": "x + 1",
+	})
+	if err != nil {
+		t.Fatalf("acyclic chain should compile, got %v", err)
+	}
+}
