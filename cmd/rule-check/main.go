@@ -24,6 +24,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/joeyciechanowicz/eve-bot/event"
+	"github.com/joeyciechanowicz/eve-bot/internal/funcs"
 	"github.com/joeyciechanowicz/eve-bot/internal/rules"
 )
 
@@ -37,6 +38,7 @@ func main() {
 		rulePath  = flag.String("rule", "", "path to a YAML file containing a single rule")
 		eventPath = flag.String("event", "", "path to a JSON fixture (Event.Fields shape, see testdata/killmails)")
 		explain   = flag.Bool("explain", false, "print each identifier referenced in `when:` with its resolved value")
+		funcsPath = flag.String("functions", "", "optional path to a YAML file with a top-level `functions:` block")
 		facts     factFlags
 	)
 	flag.Var(&facts, "fact", "seed a fact: --fact scope:key=<json>; repeatable")
@@ -50,7 +52,12 @@ func main() {
 	if err != nil {
 		fatal("load rule: %v", err)
 	}
-	set, err := rules.Compile(rules.ModeMultiMatch, []rules.Rule{rule})
+	fnSet, err := loadFuncs(*funcsPath)
+	if err != nil {
+		fatal("load functions: %v", err)
+	}
+
+	set, err := rules.Compile(rules.ModeMultiMatch, []rules.Rule{rule}, fnSet)
 	if err != nil {
 		fatal("%v", err)
 	}
@@ -73,7 +80,7 @@ func main() {
 	}
 
 	if *explain {
-		printExplain(rule.When, ev, store)
+		printExplain(rule.When, ev, store, fnSet)
 	}
 
 	matches := set.Evaluate(ev, store)
@@ -105,6 +112,25 @@ func loadRule(path string) (rules.Rule, error) {
 	}
 	list[0].Enabled = true
 	return list[0], nil
+}
+
+// loadFuncs compiles the `functions:` block from path, or returns an empty set
+// when path is empty. Only YAML funcs are available to rule-check (no Go funcs).
+func loadFuncs(path string) (*funcs.Set, error) {
+	if path == "" {
+		return funcs.Compile(nil, nil)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var doc struct {
+		Functions map[string]string `yaml:"functions"`
+	}
+	if err := yaml.Unmarshal(b, &doc); err != nil {
+		return nil, err
+	}
+	return funcs.Compile(nil, doc.Functions)
 }
 
 func loadFields(path string) (map[string]any, error) {
@@ -222,7 +248,7 @@ func buildFacts(flags factFlags) (*memFacts, error) {
 // printExplain shows each top-level identifier from the `when:` expression
 // and the value it resolved to in the event's environment. Spotting `nil`
 // here is the fastest way to catch typo'd field names.
-func printExplain(when string, ev *event.Event, facts rules.FactStore) {
+func printExplain(when string, ev *event.Event, facts rules.FactStore, fnSet *funcs.Set) {
 	if when == "" {
 		when = "true"
 	}
@@ -236,8 +262,11 @@ func printExplain(when string, ev *event.Event, facts rules.FactStore) {
 	node := tree.Node
 	ast.Walk(&node, v)
 
-	env := buildEnv(ev, facts)
+	env := buildEnv(ev, facts, fnSet)
 	skip := map[string]bool{"fact": true, "fact_exists": true, "fact_count": true, "now": true}
+	for name := range fnSet.Names() {
+		skip[name] = true
+	}
 
 	names := make([]string, 0, len(idents))
 	for n := range idents {
@@ -274,8 +303,11 @@ func (c *identCollector) Visit(node *ast.Node) {
 }
 
 // buildEnv mirrors rules.buildEnv (which is unexported). Kept in lockstep:
-// if the rules package adds a reserved identifier, add it here too.
-func buildEnv(ev *event.Event, facts rules.FactStore) map[string]any {
+// if the rules package adds a reserved identifier, add it here too. Two
+// deliberate divergences exist: `now` is a captured value here (a func in
+// rules), and the fact helpers are bound as method values rather than lambdas.
+// These only affect the --explain display, not rule evaluation.
+func buildEnv(ev *event.Event, facts rules.FactStore, fnSet *funcs.Set) map[string]any {
 	env := make(map[string]any, len(ev.Fields)+8)
 	maps.Copy(env, ev.Fields)
 	env["event_id"] = ev.ID
@@ -288,6 +320,7 @@ func buildEnv(ev *event.Event, facts rules.FactStore) map[string]any {
 		env["fact_exists"] = facts.Exists
 		env["fact_count"] = facts.RangeCount
 	}
+	fnSet.BindExprEnv(env)
 	return env
 }
 

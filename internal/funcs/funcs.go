@@ -1,0 +1,301 @@
+// Package funcs compiles a set of custom functions usable in both expr-lang
+// `when:` expressions (internal/rules) and Go text/template action args
+// (action). Functions come from two sources: Go funcs registered by the host
+// program, and parameterized YAML funcs whose bodies are expr-lang programs.
+//
+// YAML func bodies close over the per-event environment, so they may read event
+// fields and call Go funcs and other YAML funcs. Cycles among YAML funcs are
+// rejected at compile time (no recursion).
+package funcs
+
+import (
+	"fmt"
+	"maps"
+	"reflect"
+	"strings"
+	"text/template"
+
+	"github.com/expr-lang/expr"
+	"github.com/expr-lang/expr/ast"
+	"github.com/expr-lang/expr/parser"
+	"github.com/expr-lang/expr/vm"
+)
+
+// reserved identifiers are provided by internal/rules.buildEnv (and the
+// template render context). Custom functions may not shadow them. Keep this in
+// sync with internal/rules/rules.go:buildEnv and action/action.go:renderArgs.
+var reserved = map[string]bool{
+	"event_id": true, "event_source": true, "event_type": true,
+	"occurred_at": true, "now": true,
+	"fact": true, "fact_exists": true, "fact_count": true,
+	"item": true,
+}
+
+// yamlFunc is one compiled YAML-declared function.
+type yamlFunc struct {
+	name    string
+	params  []string
+	body    string
+	program *vm.Program
+}
+
+// Set is a compiled, validated collection of custom functions.
+type Set struct {
+	goFuncs   map[string]any
+	yamlFuncs []yamlFunc
+}
+
+// Compile validates and compiles the function set. goFuncs maps a name to a
+// raw Go func value (must be text/template-compatible: one return value, or a
+// value plus error). yamlSrc maps a signature key ("name(a, b)") to an
+// expr-lang body. Compile fails fast on any error.
+func Compile(goFuncs map[string]any, yamlSrc map[string]string) (*Set, error) {
+	s := &Set{goFuncs: map[string]any{}}
+
+	// Validate Go funcs.
+	for name, fn := range goFuncs {
+		if !isIdent(name) {
+			return nil, fmt.Errorf("funcs: invalid Go func name %q", name)
+		}
+		if reserved[name] {
+			return nil, fmt.Errorf("funcs: %q is a reserved identifier", name)
+		}
+		if err := validateGoFunc(name, fn); err != nil {
+			return nil, err
+		}
+		s.goFuncs[name] = fn
+	}
+
+	// Parse + compile YAML funcs.
+	names := map[string]bool{}
+	for k := range s.goFuncs {
+		names[k] = true
+	}
+	for key, body := range yamlSrc {
+		name, params, err := parseSignature(key)
+		if err != nil {
+			return nil, fmt.Errorf("funcs: %w", err)
+		}
+		if reserved[name] {
+			return nil, fmt.Errorf("funcs: %q is a reserved identifier", name)
+		}
+		if names[name] {
+			return nil, fmt.Errorf("funcs: duplicate function name %q", name)
+		}
+		names[name] = true
+		prog, err := expr.Compile(body, expr.AllowUndefinedVariables())
+		if err != nil {
+			return nil, fmt.Errorf("funcs: compile %q: %w", name, err)
+		}
+		s.yamlFuncs = append(s.yamlFuncs, yamlFunc{name: name, params: params, body: body, program: prog})
+	}
+
+	if err := s.checkAcyclic(); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// Names returns the set of all function names (Go and YAML). Useful for tools
+// that need to distinguish function identifiers from field references.
+func (s *Set) Names() map[string]struct{} {
+	out := map[string]struct{}{}
+	if s == nil {
+		return out
+	}
+	for name := range s.goFuncs {
+		out[name] = struct{}{}
+	}
+	for _, yf := range s.yamlFuncs {
+		out[yf.name] = struct{}{}
+	}
+	return out
+}
+
+// validateGoFunc ensures fn is a func returning either (T) or (T, error).
+func validateGoFunc(name string, fn any) error {
+	t := reflect.TypeOf(fn)
+	if t == nil || t.Kind() != reflect.Func {
+		return fmt.Errorf("funcs: %q is not a function", name)
+	}
+	errType := reflect.TypeFor[error]()
+	switch t.NumOut() {
+	case 1:
+		return nil
+	case 2:
+		if t.Out(1).Implements(errType) {
+			return nil
+		}
+	}
+	return fmt.Errorf("funcs: %q must return (T) or (T, error)", name)
+}
+
+// parseSignature splits "name(a, b)" into its name and parameter list. Params
+// must be unique identifiers; an empty list ("f()") is allowed.
+func parseSignature(key string) (string, []string, error) {
+	key = strings.TrimSpace(key)
+	open := strings.IndexByte(key, '(')
+	if open < 0 || !strings.HasSuffix(key, ")") {
+		return "", nil, fmt.Errorf("invalid signature %q: want name(params...)", key)
+	}
+	name := strings.TrimSpace(key[:open])
+	if !isIdent(name) {
+		return "", nil, fmt.Errorf("invalid function name %q", name)
+	}
+	inner := strings.TrimSpace(key[open+1 : len(key)-1])
+	var params []string
+	if inner != "" {
+		seen := map[string]bool{}
+		for p := range strings.SplitSeq(inner, ",") {
+			p = strings.TrimSpace(p)
+			if !isIdent(p) {
+				return "", nil, fmt.Errorf("function %s: invalid param %q", name, p)
+			}
+			if seen[p] {
+				return "", nil, fmt.Errorf("function %s: duplicate param %q", name, p)
+			}
+			seen[p] = true
+			params = append(params, p)
+		}
+	}
+	return name, params, nil
+}
+
+func isIdent(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		ok := r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
+		if i > 0 {
+			ok = ok || (r >= '0' && r <= '9')
+		}
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// checkAcyclic builds a call graph over YAML funcs (an edge a->b when a's body
+// references b) and rejects any cycle. Calls into Go funcs and builtins are
+// ignored — only YAML-to-YAML edges can form a cycle.
+func (s *Set) checkAcyclic() error {
+	yamlNames := map[string]bool{}
+	for _, f := range s.yamlFuncs {
+		yamlNames[f.name] = true
+	}
+	bodyByName := map[string]string{}
+	for _, f := range s.yamlFuncs {
+		bodyByName[f.name] = f.body
+	}
+
+	const (
+		white = 0
+		gray  = 1
+		black = 2
+	)
+	color := map[string]int{}
+	var visit func(name string) error
+	visit = func(name string) error {
+		color[name] = gray
+		tree, err := parser.Parse(bodyByName[name])
+		if err != nil {
+			return fmt.Errorf("funcs: parse %q: %w", name, err)
+		}
+		refs := map[string]struct{}{}
+		node := tree.Node
+		ast.Walk(&node, &identCollector{idents: refs})
+		for ref := range refs {
+			if ref == name {
+				return fmt.Errorf("funcs: function %q is recursive (cycles not allowed)", name)
+			}
+			if !yamlNames[ref] {
+				continue
+			}
+			switch color[ref] {
+			case gray:
+				return fmt.Errorf("funcs: cycle detected involving %q and %q", name, ref)
+			case white:
+				if err := visit(ref); err != nil {
+					return err
+				}
+			}
+		}
+		color[name] = black
+		return nil
+	}
+	for _, f := range s.yamlFuncs {
+		if color[f.name] == white {
+			if err := visit(f.name); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// identCollector gathers every identifier in an expr AST. It is intentionally
+// conservative: it reports an edge for any reference to another YAML func name,
+// even one used as a value rather than called. Such references are nonsensical
+// in practice, so this never yields a false-positive cycle in real configs.
+type identCollector struct {
+	idents map[string]struct{}
+}
+
+func (c *identCollector) Visit(node *ast.Node) {
+	if id, ok := (*node).(*ast.IdentifierNode); ok {
+		c.idents[id.Value] = struct{}{}
+	}
+}
+
+// BindExprEnv injects the function set into an expr-lang environment map. env
+// must already hold the event fields and reserved helpers. Go funcs are added
+// directly; each YAML func is added as a variadic closure that captures env by
+// reference — so when called it sees every event field and every other func.
+func (s *Set) BindExprEnv(env map[string]any) {
+	if s == nil {
+		return
+	}
+	maps.Copy(env, s.goFuncs)
+	for _, yf := range s.yamlFuncs {
+		env[yf.name] = makeClosure(yf, env)
+	}
+}
+
+// makeClosure builds the runtime closure for a YAML func. It clones the shared
+// env per call, binds positional args to the declared params, and runs the
+// compiled body. Cloning keeps calls side-effect-free and prevents param
+// bindings from leaking back to the caller.
+func makeClosure(yf yamlFunc, env map[string]any) func(...any) (any, error) {
+	return func(args ...any) (any, error) {
+		if len(args) != len(yf.params) {
+			return nil, fmt.Errorf("funcs: function %s expects %d args, got %d", yf.name, len(yf.params), len(args))
+		}
+		child := maps.Clone(env)
+		for i, p := range yf.params {
+			child[p] = args[i]
+		}
+		return expr.Run(yf.program, child)
+	}
+}
+
+// TemplateFuncMap returns a text/template FuncMap for one render context. Go
+// funcs are exposed directly; YAML funcs are bound through an expr env derived
+// from ctx, so inside a template they can still read event fields and call
+// peer funcs — exactly as they do in `when:` expressions.
+func (s *Set) TemplateFuncMap(ctx map[string]any) template.FuncMap {
+	fm := template.FuncMap{}
+	if s == nil {
+		return fm
+	}
+	env := maps.Clone(ctx)
+	s.BindExprEnv(env)
+	for name := range s.goFuncs {
+		fm[name] = env[name]
+	}
+	for _, yf := range s.yamlFuncs {
+		fm[yf.name] = env[yf.name]
+	}
+	return fm
+}

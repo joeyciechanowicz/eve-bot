@@ -14,6 +14,7 @@ import (
 	"github.com/expr-lang/expr/vm"
 
 	"github.com/joeyciechanowicz/eve-bot/event"
+	"github.com/joeyciechanowicz/eve-bot/internal/funcs"
 )
 
 // Mode controls whether evaluation stops at the first match or continues.
@@ -55,6 +56,7 @@ type Rule struct {
 type Set struct {
 	Mode  Mode
 	Rules []Rule
+	fns   *funcs.Set
 }
 
 // FactStore is the subset of internal/store.Store that rule expressions need.
@@ -66,7 +68,7 @@ type FactStore interface {
 
 // Compile validates + compiles every rule's `when` expression. Returns on the
 // first error so misconfigurations fail fast at startup.
-func Compile(mode Mode, raw []Rule) (*Set, error) {
+func Compile(mode Mode, raw []Rule, fns *funcs.Set) (*Set, error) {
 	if mode == "" {
 		mode = ModeFirstMatch
 	}
@@ -102,7 +104,7 @@ func Compile(mode Mode, raw []Rule) (*Set, error) {
 	sort.SliceStable(out, func(i, j int) bool {
 		return out[i].Priority < out[j].Priority
 	})
-	return &Set{Mode: mode, Rules: out}, nil
+	return &Set{Mode: mode, Rules: out, fns: fns}, nil
 }
 
 // Match is a single rule match on a single event.
@@ -117,7 +119,7 @@ func (s *Set) Evaluate(ev *event.Event, facts FactStore) []Match {
 	if s == nil {
 		return nil
 	}
-	env := buildEnv(ev, facts)
+	env := buildEnv(ev, facts, s.fns)
 
 	var matches []Match
 	for i := range s.Rules {
@@ -151,7 +153,7 @@ func (s *Set) Evaluate(ev *event.Event, facts FactStore) []Match {
 // level, plus fact helpers and event metadata. Reserved identifiers:
 //   event_id, event_source, event_type, occurred_at,
 //   fact, fact_exists, fact_count, now
-func buildEnv(ev *event.Event, facts FactStore) map[string]any {
+func buildEnv(ev *event.Event, facts FactStore, fns *funcs.Set) map[string]any {
 	env := make(map[string]any, len(ev.Fields)+8)
 	maps.Copy(env, ev.Fields)
 	env["event_id"] = ev.ID
@@ -169,5 +171,6 @@ func buildEnv(ev *event.Event, facts FactStore) map[string]any {
 		env["fact_exists"] = func(string, string) bool { return false }
 		env["fact_count"] = func(string, string) int { return 0 }
 	}
+	fns.BindExprEnv(env)
 	return env
 }

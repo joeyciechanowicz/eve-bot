@@ -109,6 +109,59 @@ Plus the full expr-lang builtins: `any`, `all`, `filter`, `map`, `len`,
 `contains`, `string`, `int`, date/time functions, etc. See
 <https://expr-lang.org/docs/language-definition>.
 
+## Custom functions
+
+Declare reusable functions in a top-level `functions:` block. The key is a
+signature; the value is an expr-lang body. A body can use the builtins above,
+the current event's fields, any other custom function, and any Go function the
+host program registered (see below).
+
+```yaml
+functions:
+  'is_expensive(threshold)':  'zkb.total_value > threshold'
+  'near_jita(system, jumps)': 'distance(system, 30000142) <= jumps'
+```
+
+The same functions are available in any `when:` clause **and** in any
+templated action arg:
+
+```yaml
+rules:
+  - name: pricey
+    when: 'is_expensive(1e9)'
+    actions:
+      - type: console
+        args:
+          msg: '{{ if is_expensive 1e9 }}BIG{{ end }} kill'
+```
+
+Notes:
+
+- A body is evaluated against the current event, so it can read fields
+  directly (e.g. `zkb.total_value`) on top of its declared params.
+- Functions may call one another, but **cycles are rejected at startup** —
+  functions are not recursive.
+- A name may not shadow a built-in helper (`fact`, `now`, …) or an event
+  field reserved identifier; collisions fail fast at startup.
+
+Go functions are registered in code when starting the bot:
+
+```go
+bot.Run(ctx, "config.yaml",
+    bot.WithFunc("distance", func(a, b int64) int { /* ... */ }),
+)
+```
+
+A `WithFunc` value must return either `T` or `(T, error)` so it works in both
+expr-lang and `text/template`.
+
+To validate a rule that uses custom functions, pass the same file (or any YAML
+file with a `functions:` block) to `rule-check` via `--functions`:
+
+```
+rule-check --rule myrule.yaml --event fixture.json --functions config.yaml --explain
+```
+
 ## Modes
 
 - **first-match** — rules are tried in ascending `priority`; the first match

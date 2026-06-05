@@ -23,6 +23,13 @@ enrich:
     cache_ttl: 168h   # 7d
     # base_url: https://esi.evetech.net
 
+# Reusable functions callable from any `when:` clause and any templated action
+# arg. The key is a signature; the value is an expr-lang body that can read the
+# event's fields, call other functions, and call Go funcs registered via
+# bot.WithFunc. Cycles are rejected at startup. See RULES.md › Custom functions.
+# functions:
+#   'is_expensive(threshold)': 'zkb.total_value > threshold'
+
 # Event producers. Each source runs in its own goroutine and feeds the shared
 # rule engine below. The `name` identifies a source instance for checkpoints
 # and is what rules match on via the optional `sources:` field.

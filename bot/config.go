@@ -37,6 +37,11 @@ type Config struct {
 	Rules   RuleSetConfig  `yaml:"rules"`
 
 	Enrich EnrichConfig `yaml:"enrich"`
+
+	// Functions declares custom functions usable in both `when:` expressions
+	// and templated action args. The key is a signature ("name(a, b)") and the
+	// value is an expr-lang body. See internal/funcs.
+	Functions map[string]string `yaml:"functions"`
 }
 
 // EnrichConfig configures cross-cutting enrichers that run after source-local
