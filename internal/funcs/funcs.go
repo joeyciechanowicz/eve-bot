@@ -96,6 +96,22 @@ func Compile(goFuncs map[string]any, yamlSrc map[string]string) (*Set, error) {
 	return s, nil
 }
 
+// Names returns the set of all function names (Go and YAML). Useful for tools
+// that need to distinguish function identifiers from field references.
+func (s *Set) Names() map[string]struct{} {
+	out := map[string]struct{}{}
+	if s == nil {
+		return out
+	}
+	for name := range s.goFuncs {
+		out[name] = struct{}{}
+	}
+	for _, yf := range s.yamlFuncs {
+		out[yf.name] = struct{}{}
+	}
+	return out
+}
+
 // validateGoFunc ensures fn is a func returning either (T) or (T, error).
 func validateGoFunc(name string, fn any) error {
 	t := reflect.TypeOf(fn)

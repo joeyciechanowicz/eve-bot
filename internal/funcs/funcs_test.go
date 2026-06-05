@@ -260,3 +260,20 @@ func TestTemplateFuncMap_NilReceiver(t *testing.T) {
 		t.Fatalf("nil TemplateFuncMap = %v, want empty", fm)
 	}
 }
+
+func TestNames(t *testing.T) {
+	s, err := Compile(
+		map[string]any{"g": func() bool { return true }},
+		map[string]string{"y(a)": "a > 0"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := s.Names()
+	if _, ok := names["g"]; !ok {
+		t.Fatal("missing g")
+	}
+	if _, ok := names["y"]; !ok {
+		t.Fatal("missing y")
+	}
+}
