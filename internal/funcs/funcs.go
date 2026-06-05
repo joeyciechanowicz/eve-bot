@@ -35,6 +35,7 @@ var reserved = map[string]bool{
 type yamlFunc struct {
 	name    string
 	params  []string
+	body    string
 	program *vm.Program
 }
 
@@ -86,10 +87,10 @@ func Compile(goFuncs map[string]any, yamlSrc map[string]string) (*Set, error) {
 		if err != nil {
 			return nil, fmt.Errorf("funcs: compile %q: %w", name, err)
 		}
-		s.yamlFuncs = append(s.yamlFuncs, yamlFunc{name: name, params: params, program: prog})
+		s.yamlFuncs = append(s.yamlFuncs, yamlFunc{name: name, params: params, body: body, program: prog})
 	}
 
-	if err := s.checkAcyclic(yamlSrc); err != nil {
+	if err := s.checkAcyclic(); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -101,7 +102,7 @@ func validateGoFunc(name string, fn any) error {
 	if t == nil || t.Kind() != reflect.Func {
 		return fmt.Errorf("funcs: %q is not a function", name)
 	}
-	errType := reflect.TypeOf((*error)(nil)).Elem()
+	errType := reflect.TypeFor[error]()
 	switch t.NumOut() {
 	case 1:
 		return nil
@@ -129,7 +130,7 @@ func parseSignature(key string) (string, []string, error) {
 	var params []string
 	if inner != "" {
 		seen := map[string]bool{}
-		for _, p := range strings.Split(inner, ",") {
+		for p := range strings.SplitSeq(inner, ",") {
 			p = strings.TrimSpace(p)
 			if !isIdent(p) {
 				return "", nil, fmt.Errorf("function %s: invalid param %q", name, p)
@@ -163,18 +164,14 @@ func isIdent(s string) bool {
 // checkAcyclic builds a call graph over YAML funcs (an edge a->b when a's body
 // references b) and rejects any cycle. Calls into Go funcs and builtins are
 // ignored — only YAML-to-YAML edges can form a cycle.
-func (s *Set) checkAcyclic(yamlSrc map[string]string) error {
+func (s *Set) checkAcyclic() error {
 	yamlNames := map[string]bool{}
 	for _, f := range s.yamlFuncs {
 		yamlNames[f.name] = true
 	}
 	bodyByName := map[string]string{}
-	for key, body := range yamlSrc {
-		name, _, err := parseSignature(key)
-		if err != nil {
-			return err
-		}
-		bodyByName[name] = body
+	for _, f := range s.yamlFuncs {
+		bodyByName[f.name] = f.body
 	}
 
 	const (
@@ -222,6 +219,10 @@ func (s *Set) checkAcyclic(yamlSrc map[string]string) error {
 	return nil
 }
 
+// identCollector gathers every identifier in an expr AST. It is intentionally
+// conservative: it reports an edge for any reference to another YAML func name,
+// even one used as a value rather than called. Such references are nonsensical
+// in practice, so this never yields a false-positive cycle in real configs.
 type identCollector struct {
 	idents map[string]struct{}
 }
@@ -240,9 +241,7 @@ func (s *Set) BindExprEnv(env map[string]any) {
 	if s == nil {
 		return
 	}
-	for name, fn := range s.goFuncs {
-		env[name] = fn
-	}
+	maps.Copy(env, s.goFuncs)
 	for _, yf := range s.yamlFuncs {
 		env[yf.name] = makeClosure(yf, env)
 	}
@@ -255,7 +254,7 @@ func (s *Set) BindExprEnv(env map[string]any) {
 func makeClosure(yf yamlFunc, env map[string]any) func(...any) (any, error) {
 	return func(args ...any) (any, error) {
 		if len(args) != len(yf.params) {
-			return nil, fmt.Errorf("function %s expects %d args, got %d", yf.name, len(yf.params), len(args))
+			return nil, fmt.Errorf("funcs: function %s expects %d args, got %d", yf.name, len(yf.params), len(args))
 		}
 		child := maps.Clone(env)
 		for i, p := range yf.params {

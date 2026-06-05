@@ -73,6 +73,13 @@ func TestCompileRejectsNonTemplateGoFunc(t *testing.T) {
 	}
 }
 
+func TestCompileRejectsZeroReturnGoFunc(t *testing.T) {
+	_, err := Compile(map[string]any{"bad": func() {}}, nil)
+	if err == nil || !strings.Contains(err.Error(), "bad") {
+		t.Fatalf("want signature error for 0-return func, got %v", err)
+	}
+}
+
 func TestCompileRejectsCycle(t *testing.T) {
 	_, err := Compile(nil, map[string]string{
 		"a(x)": "b(x)",
@@ -220,6 +227,20 @@ func TestTemplateFuncMap_YamlReadsCtx(t *testing.T) {
 		map[string]any{"value": 250})
 	if got != "yes" {
 		t.Fatalf("got %q, want yes", got)
+	}
+}
+
+func TestTemplateFuncMap_YamlCallsYaml(t *testing.T) {
+	s, err := Compile(nil, map[string]string{
+		"a(x)": "b(x) + 1",
+		"b(x)": "x * 2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := renderTmpl(t, s, `{{ a 10 }}`, map[string]any{}) // 10*2 + 1 = 21
+	if got != "21" {
+		t.Fatalf("got %q, want 21", got)
 	}
 }
 
