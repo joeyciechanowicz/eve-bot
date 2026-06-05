@@ -10,6 +10,7 @@ package funcs
 
 import (
 	"fmt"
+	"maps"
 	"reflect"
 	"strings"
 
@@ -227,5 +228,38 @@ type identCollector struct {
 func (c *identCollector) Visit(node *ast.Node) {
 	if id, ok := (*node).(*ast.IdentifierNode); ok {
 		c.idents[id.Value] = struct{}{}
+	}
+}
+
+// BindExprEnv injects the function set into an expr-lang environment map. env
+// must already hold the event fields and reserved helpers. Go funcs are added
+// directly; each YAML func is added as a variadic closure that captures env by
+// reference — so when called it sees every event field and every other func.
+func (s *Set) BindExprEnv(env map[string]any) {
+	if s == nil {
+		return
+	}
+	for name, fn := range s.goFuncs {
+		env[name] = fn
+	}
+	for _, yf := range s.yamlFuncs {
+		env[yf.name] = makeClosure(yf, env)
+	}
+}
+
+// makeClosure builds the runtime closure for a YAML func. It clones the shared
+// env per call, binds positional args to the declared params, and runs the
+// compiled body. Cloning keeps calls side-effect-free and prevents param
+// bindings from leaking back to the caller.
+func makeClosure(yf yamlFunc, env map[string]any) func(...any) (any, error) {
+	return func(args ...any) (any, error) {
+		if len(args) != len(yf.params) {
+			return nil, fmt.Errorf("function %s expects %d args, got %d", yf.name, len(yf.params), len(args))
+		}
+		child := maps.Clone(env)
+		for i, p := range yf.params {
+			child[p] = args[i]
+		}
+		return expr.Run(yf.program, child)
 	}
 }

@@ -3,6 +3,8 @@ package funcs
 import (
 	"strings"
 	"testing"
+
+	"github.com/expr-lang/expr"
 )
 
 func TestParseSignature(t *testing.T) {
@@ -86,5 +88,87 @@ func TestCompileAllowsAcyclicChain(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("acyclic chain should compile, got %v", err)
+	}
+}
+
+func runExpr(t *testing.T, s *Set, src string, env map[string]any) any {
+	t.Helper()
+	s.BindExprEnv(env)
+	prog, err := expr.Compile(src, expr.AllowUndefinedVariables())
+	if err != nil {
+		t.Fatalf("compile %q: %v", src, err)
+	}
+	out, err := expr.Run(prog, env)
+	if err != nil {
+		t.Fatalf("run %q: %v", src, err)
+	}
+	return out
+}
+
+func TestBindExprEnv_GoFunc(t *testing.T) {
+	s, err := Compile(map[string]any{
+		"double": func(n int) int { return n * 2 },
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := runExpr(t, s, "double(21)", map[string]any{})
+	if got != 42 {
+		t.Fatalf("double(21) = %v, want 42", got)
+	}
+}
+
+func TestBindExprEnv_YamlFuncReadsEventField(t *testing.T) {
+	s, err := Compile(nil, map[string]string{
+		"is_expensive(threshold)": "value > threshold",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := runExpr(t, s, "is_expensive(100)", map[string]any{"value": 250})
+	if got != true {
+		t.Fatalf("is_expensive(100) with value=250 = %v, want true", got)
+	}
+}
+
+func TestBindExprEnv_YamlCallsGoAndYaml(t *testing.T) {
+	s, err := Compile(
+		map[string]any{"inc": func(n int) int { return n + 1 }},
+		map[string]string{
+			"a(x)": "b(x) + inc(x)",
+			"b(x)": "x * 2",
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := runExpr(t, s, "a(10)", map[string]any{})
+	if got != 31 {
+		t.Fatalf("a(10) = %v, want 31", got)
+	}
+}
+
+func TestBindExprEnv_CloneIsolation(t *testing.T) {
+	s, err := Compile(nil, map[string]string{"id(x)": "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]any{}
+	runExpr(t, s, "id(5)", env)
+	if _, leaked := env["x"]; leaked {
+		t.Fatal("param x leaked into caller env")
+	}
+}
+
+func TestBindExprEnv_ArgCountMismatch(t *testing.T) {
+	s, err := Compile(nil, map[string]string{"f(a, b)": "a + b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]any{}
+	s.BindExprEnv(env)
+	prog, _ := expr.Compile("f(1)", expr.AllowUndefinedVariables())
+	if _, err := expr.Run(prog, env); err == nil {
+		t.Fatal("want arg-count error, got nil")
 	}
 }
