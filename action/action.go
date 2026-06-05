@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/joeyciechanowicz/eve-bot/event"
+	"github.com/joeyciechanowicz/eve-bot/internal/funcs"
 	"github.com/joeyciechanowicz/eve-bot/internal/rules"
 )
 
@@ -50,17 +51,19 @@ type Dispatcher struct {
 	baseBackoff time.Duration
 	maxBackoff  time.Duration
 	idem        IdempotencyStore
+	fns         *funcs.Set
 	Counters    Counters
 }
 
 // New builds a dispatcher. Pass nil for idem to disable idempotency checks.
-func New(handlers map[string]Handler, idem IdempotencyStore, maxRetries int, baseBackoff, maxBackoff time.Duration) *Dispatcher {
+func New(handlers map[string]Handler, idem IdempotencyStore, maxRetries int, baseBackoff, maxBackoff time.Duration, fns *funcs.Set) *Dispatcher {
 	return &Dispatcher{
 		handlers:    handlers,
 		maxRetries:  maxRetries,
 		baseBackoff: baseBackoff,
 		maxBackoff:  maxBackoff,
 		idem:        idem,
+		fns:         fns,
 	}
 }
 
@@ -94,7 +97,7 @@ func (d *Dispatcher) runAction(ctx context.Context, ev *event.Event, rule *rules
 	}
 
 	for idx, item := range items {
-		args, err := renderArgs(ac.Args, ev, item)
+		args, err := renderArgs(ac.Args, ev, item, d.fns)
 		if err != nil {
 			slog.Error("action: render args", "rule", rule.Name, "type", ac.Type, "error", err)
 			d.Counters.Failure++
@@ -155,7 +158,7 @@ func (d *Dispatcher) backoffFor(attempt int) time.Duration {
 // renderArgs walks args and template-renders any string that contains `{{`.
 // The template context is event fields at the top level, plus `item` (current
 // for-each value), plus event_id/event_source/event_type/occurred_at.
-func renderArgs(args map[string]any, ev *event.Event, item any) (map[string]any, error) {
+func renderArgs(args map[string]any, ev *event.Event, item any, fns *funcs.Set) (map[string]any, error) {
 	ctx := make(map[string]any, len(ev.Fields)+5)
 	maps.Copy(ctx, ev.Fields)
 	ctx["event_id"] = ev.ID
@@ -164,7 +167,8 @@ func renderArgs(args map[string]any, ev *event.Event, item any) (map[string]any,
 	ctx["occurred_at"] = ev.OccurredAt
 	ctx["item"] = item
 
-	out, err := walkRender(args, ctx)
+	fm := fns.TemplateFuncMap(ctx)
+	out, err := walkRender(args, ctx, fm)
 	if err != nil {
 		return nil, err
 	}
@@ -172,13 +176,13 @@ func renderArgs(args map[string]any, ev *event.Event, item any) (map[string]any,
 	return m, nil
 }
 
-func walkRender(v any, ctx map[string]any) (any, error) {
+func walkRender(v any, ctx map[string]any, fm template.FuncMap) (any, error) {
 	switch x := v.(type) {
 	case string:
 		if !bytes.Contains([]byte(x), []byte("{{")) {
 			return x, nil
 		}
-		tmpl, err := template.New("").Option("missingkey=zero").Parse(x)
+		tmpl, err := template.New("").Funcs(fm).Option("missingkey=zero").Parse(x)
 		if err != nil {
 			return nil, fmt.Errorf("parse template %q: %w", x, err)
 		}
@@ -190,7 +194,7 @@ func walkRender(v any, ctx map[string]any) (any, error) {
 	case map[string]any:
 		out := make(map[string]any, len(x))
 		for k, vv := range x {
-			r, err := walkRender(vv, ctx)
+			r, err := walkRender(vv, ctx, fm)
 			if err != nil {
 				return nil, err
 			}
@@ -200,7 +204,7 @@ func walkRender(v any, ctx map[string]any) (any, error) {
 	case []any:
 		out := make([]any, len(x))
 		for i, vv := range x {
-			r, err := walkRender(vv, ctx)
+			r, err := walkRender(vv, ctx, fm)
 			if err != nil {
 				return nil, err
 			}

@@ -6,12 +6,14 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/joeyciechanowicz/eve-bot/action"
 	"github.com/joeyciechanowicz/eve-bot/event"
+	"github.com/joeyciechanowicz/eve-bot/internal/funcs"
 	"github.com/joeyciechanowicz/eve-bot/internal/rules"
 )
 
@@ -58,7 +60,7 @@ func TestForEachRunsOncePerItem(t *testing.T) {
 	d := action.New(
 		map[string]action.Handler{"test": h},
 		&fakeIdem{done: map[string]bool{}},
-		0, time.Millisecond, time.Millisecond,
+		0, time.Millisecond, time.Millisecond, nil,
 	)
 	matches := []rules.Match{{
 		Rule: &rules.Rule{Name: "r"},
@@ -87,7 +89,7 @@ func TestIdempotencySkipsSecondRun(t *testing.T) {
 	idem := &fakeIdem{done: map[string]bool{}}
 	d := action.New(
 		map[string]action.Handler{"test": h},
-		idem, 0, time.Millisecond, time.Millisecond,
+		idem, 0, time.Millisecond, time.Millisecond, nil,
 	)
 	matches := []rules.Match{{
 		Rule:    &rules.Rule{Name: "r"},
@@ -121,7 +123,7 @@ func TestRetryOnError(t *testing.T) {
 
 	d := action.New(
 		map[string]action.Handler{"webhook": action.Webhook{Client: srv.Client()}},
-		nil, 3, time.Millisecond, 5*time.Millisecond,
+		nil, 3, time.Millisecond, 5*time.Millisecond, nil,
 	)
 	matches := []rules.Match{{
 		Rule: &rules.Rule{Name: "r"},
@@ -154,7 +156,7 @@ func TestWebhookSendsBody(t *testing.T) {
 
 	d := action.New(
 		map[string]action.Handler{"webhook": action.Webhook{Client: srv.Client()}},
-		nil, 0, time.Millisecond, time.Millisecond,
+		nil, 0, time.Millisecond, time.Millisecond, nil,
 	)
 	matches := []rules.Match{{
 		Rule: &rules.Rule{Name: "r"},
@@ -167,5 +169,41 @@ func TestWebhookSendsBody(t *testing.T) {
 
 	if got["id"] != "zkill:42" {
 		t.Errorf("webhook body: %+v", got)
+	}
+}
+
+// TestDispatchUsesCustomFunc exercises the custom-func render path through the
+// exported Dispatch API (action_test is black-box, so renderArgs is not
+// reachable). A capturing handler records the rendered args.
+func TestDispatchUsesCustomFunc(t *testing.T) {
+	fns, err := funcs.Compile(map[string]any{
+		"upper": func(s string) string { return strings.ToUpper(s) },
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &fakeHandler{}
+	d := action.New(
+		map[string]action.Handler{"test": h},
+		nil, 0, time.Millisecond, time.Millisecond, fns,
+	)
+	ev := &event.Event{
+		ID: "x", Source: "zkill", Type: "killmail",
+		Fields: map[string]any{"name": "jita"},
+	}
+	matches := []rules.Match{{
+		Rule: &rules.Rule{Name: "r"},
+		Actions: []rules.ActionConfig{{
+			Type: "test",
+			Args: map[string]any{"text": "{{ upper .name }}"},
+		}},
+	}}
+	d.Dispatch(context.Background(), ev, matches)
+
+	if h.calls.Load() != 1 {
+		t.Fatalf("calls: %d, want 1", h.calls.Load())
+	}
+	if h.args[0]["text"] != "JITA" {
+		t.Fatalf("text = %v, want JITA", h.args[0]["text"])
 	}
 }
