@@ -303,7 +303,10 @@ func (c *identCollector) Visit(node *ast.Node) {
 }
 
 // buildEnv mirrors rules.buildEnv (which is unexported). Kept in lockstep:
-// if the rules package adds a reserved identifier, add it here too.
+// if the rules package adds a reserved identifier, add it here too. Two
+// deliberate divergences exist: `now` is a captured value here (a func in
+// rules), and the fact helpers are bound as method values rather than lambdas.
+// These only affect the --explain display, not rule evaluation.
 func buildEnv(ev *event.Event, facts rules.FactStore, fnSet *funcs.Set) map[string]any {
 	env := make(map[string]any, len(ev.Fields)+8)
 	maps.Copy(env, ev.Fields)

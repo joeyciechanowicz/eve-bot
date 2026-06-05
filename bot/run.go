@@ -27,7 +27,8 @@ type options struct {
 }
 
 // WithFunc registers a Go function under name. fn must return either (T) or
-// (T, error) so it works in both expr-lang and text/template.
+// (T, error) so it works in both expr-lang and text/template. Registering the
+// same name twice is last-write-wins: the later WithFunc replaces the earlier.
 func WithFunc(name string, fn any) Option {
 	return func(o *options) {
 		if o.funcs == nil {

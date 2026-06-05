@@ -277,3 +277,10 @@ func TestNames(t *testing.T) {
 		t.Fatal("missing y")
 	}
 }
+
+func TestNames_NilReceiver(t *testing.T) {
+	var s *Set
+	if got := s.Names(); len(got) != 0 {
+		t.Fatalf("nil Names() = %v, want empty", got)
+	}
+}
