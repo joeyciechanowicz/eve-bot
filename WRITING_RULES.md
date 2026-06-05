@@ -7,7 +7,7 @@ Guide for any coding agent (or human) authoring or modifying a rule in `config.y
 1. **Clarify intent.** If the user says "alert on big kills", pin down the threshold, whether NPC kills count, and which actions fire. One question is fine; three is too many.
 2. **Read `RULES.md`** for the field names and helpers available to the source you're targeting. Supported sources: `zkill` (killmails) and `evescout` (wormhole signatures). Field shapes differ — a `solar_system_name` rule makes no sense on an evescout pipeline, and `out.system_name` makes none on a zkill pipeline.
 3. **Draft the rule** in isolation — write it to a scratch file like `/tmp/rule.yaml`, not directly into `config.yaml`. A single rule, not the whole pipeline.
-4. **Validate** with `go run ./cmd/rule-check --rule /tmp/rule.yaml --event testdata/<fixture>.json`. Run it against *every* fixture under `testdata/killmails/` that's relevant — at minimum one expected match and one expected non-match.
+4. **Validate** with `go run ./cmd/rule-check --rule /tmp/rule.yaml --event testdata/<fixture>.json`. Run it against *every* fixture under `testdata/killmails/` that's relevant — at minimum one expected match and one expected non-match. If the rule calls a **custom function** (anything declared in the `functions:` block, see [`RULES.md`](RULES.md#custom-functions)), add `--functions config.yaml` so `rule-check` resolves it — otherwise the call fails at eval and the rule reports a misleading `no-match`. Watch stderr for a `WARN rules: eval error … cannot call nil` line, which is the tell that a function went unresolved.
 5. **Inspect sub-expressions** when behavior is wrong: `--explain` prints the value of each top-level identifier in the `when:` clause so you can see whether a field came back `nil` (typo) or a different type than expected.
 6. **Insert** into `config.yaml` only after validation passes. Pick a `priority` that fits the existing ordering — lower numbers run first; bookkeeping/fact-writer rules want low priorities with `continue: true`.
 
@@ -17,7 +17,8 @@ Guide for any coding agent (or human) authoring or modifying a rule in `config.y
 - `--rule <path>` — a YAML file containing a single rule (same shape as one entry in the `rules:` list).
 - `--event <path>` — a JSON file containing one event's `Fields` payload (matches a fixture in `testdata/`).
 - `--fact scope:key=<json>` — repeatable; seeds the fact store for rules that read facts.
-- `--explain` — print each identifier referenced by `when:` and its resolved value.
+- `--functions <path>` — a YAML file with a top-level `functions:` block (e.g. `config.yaml`). Required when the rule calls a custom function so it resolves; YAML functions are compiled and cycle-checked just as they are at bot startup. (Go functions registered via `bot.WithFunc` are not available to `rule-check` — see below.)
+- `--explain` — print each identifier referenced by `when:` and its resolved value. Custom-function names are recognized and omitted from the list (they aren't fields).
 
 Exit codes: `0` match, `1` no-match, `2` compile/runtime error. Treat `2` as a bug to fix, not a "no match".
 
@@ -64,6 +65,8 @@ The predicate uses the same expr-lang environment as rules. Common gaps worth ca
 - **`!zkb.npc` on alerting rules.** NPC kills are noisy; almost every "interesting human activity" rule wants this guard. Ask the user if you're unsure.
 - **Long action bodies should use YAML anchors.** If a rule's `args.body:` (typically a Discord embed or other webhook payload) is likely to be reused across rules, define it once under `x-templates:` with `&name` and reference it via `*name`. See the "Reusable action bodies" section in `RULES.md`. Don't inline a 30-line embed into three rules.
 - **ESI name fields are best-effort.** `character_name` / `corporation_name` / `alliance_name` come from the ESI bulk-names endpoint and are cached for 7 days. If ESI is unreachable on the very first sighting of an ID, the name is absent (rules see `nil`). For hard equality checks prefer the underlying ID (`victim.alliance_id == 1354830081`); reserve names for templated action bodies where a missing name is cosmetic, not load-bearing.
+- **An unresolved function looks like a clean no-match.** Calling a function that isn't declared (or forgetting `--functions`) raises an eval error that the engine logs and swallows — the rule reports `no-match` (exit `1`) with a `WARN rules: eval error … cannot call nil` on stderr. It's easy to mistake for a legitimate non-match, so scan stderr. If you're adding both a rule and the function it needs, declare the function in the `functions:` block first. Prefer reusing an existing function over inlining the same sub-expression in several rules; that's exactly what the block is for.
+- **`rule-check` can't see Go functions.** Functions registered in code via `bot.WithFunc` aren't loadable from a YAML file, so `rule-check` can't resolve a rule that calls one. Validate the YAML-declared logic in isolation, and confirm the Go-function-dependent path at runtime (or stub the function as a temporary YAML `functions:` entry just for validation).
 
 ## Output to the user
 

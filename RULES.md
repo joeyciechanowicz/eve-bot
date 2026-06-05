@@ -193,6 +193,27 @@ rule-check --rule myrule.yaml --event fixture.json --functions config.yaml --exp
   actions: [{ type: console }]
 ```
 
+### Custom function (DRY a threshold across rules)
+
+Declared once in the top-level `functions:` block, then reused in any `when:`
+and any template:
+
+```yaml
+functions:
+  'is_expensive(threshold)': 'zkb.total_value > threshold'
+
+rules:
+  mode: first-match
+  rules:
+    - name: pricey
+      priority: 10
+      when: "is_expensive(1e9) && !zkb.npc"
+      actions:
+        - type: console
+          args:
+            msg: '{{ if is_expensive 5e9 }}HUGE{{ else }}big{{ end }} kill'
+```
+
 ### Record every attacker's kill (fact writer)
 
 ```yaml
@@ -393,3 +414,10 @@ body:
 All `when:` expressions are compiled at startup; a syntax error fails the
 process with the rule name in the message. Undefined field names are
 permitted at compile time and silently yield `nil` at eval — watch for typos.
+
+Custom functions are also compiled and validated at startup: an invalid
+signature, a name that shadows a built-in helper, a body that fails to compile,
+or a cycle between functions all fail the process before any event is
+processed. To validate a rule that calls a custom function with
+`cmd/rule-check`, pass the file declaring it via `--functions` (see
+[WRITING_RULES.md](WRITING_RULES.md)).

@@ -28,9 +28,13 @@ the pipeline is pluggable:
   at startup.
 - **Actions** are the side effects — console, webhook, fact-store writes,
   Discord replies — with idempotency and retry built in.
+- **Custom functions** — declare reusable, parameterized helpers in a
+  top-level `functions:` block, or register Go functions with `bot.WithFunc`.
+  Both are callable from every `when:` expression **and** every templated
+  action arg. See [Custom functions](RULES.md#custom-functions).
 
-See [RULES.md](RULES.md) for the rule language and [spec.md](spec.md) for the
-full design.
+See [RULES.md](RULES.md) for the rule language, [WRITING_RULES.md](WRITING_RULES.md)
+for the rule-authoring workflow, and [spec.md](spec.md) for the full design.
 
 ---
 
@@ -116,13 +120,25 @@ func main() {
     flag.Parse()
     ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
     defer stop()
-    if err := bot.Run(ctx, *cfg); err != nil { os.Exit(1) }
+    if err := bot.Run(ctx, *cfg,
+        // Register Go functions callable from when: expressions and {{ }} templates.
+        bot.WithFunc("jumps", routeJumps), // func(from, to int64) (int, error)
+    ); err != nil {
+        os.Exit(1)
+    }
 }
 ```
 
 Your source implements `source.Source` and calls `source.Register` in its
 `init()`; the YAML `type:` selects it. Same pattern for custom actions via
 `action.Register`.
+
+**Custom functions.** `bot.WithFunc(name, fn)` registers a Go function that
+rules and action templates can call by `name`. `fn` must return `T` or
+`(T, error)` so it works in both expr-lang and `text/template`. Config authors
+can also declare parameterized functions purely in YAML via the top-level
+`functions:` block — no Go needed. Both kinds compose (a YAML function may call
+a Go-registered one). See [Custom functions](RULES.md#custom-functions).
 
 For private GitHub modules, set `GOPRIVATE=github.com/you/*` so Go skips the
 public proxy.
