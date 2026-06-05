@@ -194,10 +194,10 @@ func (s *Set) checkAcyclic(yamlSrc map[string]string) error {
 		node := tree.Node
 		ast.Walk(&node, &identCollector{idents: refs})
 		for ref := range refs {
-			if !yamlNames[ref] || ref == name {
-				if ref == name {
-					return fmt.Errorf("funcs: function %q is recursive (cycles not allowed)", name)
-				}
+			if ref == name {
+				return fmt.Errorf("funcs: function %q is recursive (cycles not allowed)", name)
+			}
+			if !yamlNames[ref] {
 				continue
 			}
 			switch color[ref] {

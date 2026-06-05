@@ -49,6 +49,14 @@ func TestCompileRejectsReservedName(t *testing.T) {
 	}
 }
 
+func TestCompileRejectsReservedGoFuncName(t *testing.T) {
+	goFns := map[string]any{"now": func() int { return 0 }}
+	_, err := Compile(goFns, nil)
+	if err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("want reserved-name error for Go func, got %v", err)
+	}
+}
+
 func TestCompileRejectsGoYamlCollision(t *testing.T) {
 	goFns := map[string]any{"dup": func() bool { return true }}
 	_, err := Compile(goFns, map[string]string{"dup(a)": "a > 0"})
@@ -212,5 +220,22 @@ func TestTemplateFuncMap_YamlReadsCtx(t *testing.T) {
 		map[string]any{"value": 250})
 	if got != "yes" {
 		t.Fatalf("got %q, want yes", got)
+	}
+}
+
+func TestBindExprEnv_NilReceiver(t *testing.T) {
+	var s *Set
+	env := map[string]any{"a": 1}
+	s.BindExprEnv(env) // must not panic
+	if len(env) != 1 {
+		t.Fatalf("nil BindExprEnv mutated env: %v", env)
+	}
+}
+
+func TestTemplateFuncMap_NilReceiver(t *testing.T) {
+	var s *Set
+	fm := s.TemplateFuncMap(map[string]any{"a": 1}) // must not panic
+	if len(fm) != 0 {
+		t.Fatalf("nil TemplateFuncMap = %v, want empty", fm)
 	}
 }
